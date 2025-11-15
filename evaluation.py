@@ -1,25 +1,29 @@
+# evaluation.py
+
+from typing import Union, Dict, Optional
+import numpy as np
+
 from constants import *
 from environment import TrafficEnv
 from agent import TrafficAgent
-import numpy as np
 
 class TimerAgent:
-    """A baseline agent that switches lights on a fixed timer."""
+    """A baseline agent that switches traffic lights on a fixed timer."""
     def __init__(self):
         self.steps_since_last_switch = 0
+        # Convert seconds to simulation steps (1 step = 15 frames)
         self.green_duration_steps = GREEN_DURATION / 15.0
 
-    def predict(self, obs: np.ndarray, deterministic: bool = True) -> tuple:
+    def predict(self, obs: np.ndarray, deterministic: bool = True) -> tuple[int, None]:
         """
-        Predicts an action based on the timer.
-        
-        Parameters:
-            obs: The current observation (not used in this agent).
-            deterministic: Whether to use deterministic actions (not used here).
+        Predicts an action based on a fixed timer. Mimics the SB3 predict method.
+
+        Args:
+            obs: The current observation (unused by this agent).
+            deterministic: Placeholder for API compatibility (unused).
 
         Returns:
-            action: 0 to keep current light, 1 to switch.
-            None: Placeholder for compatibility.
+            A tuple containing the action (0 for Keep, 1 for Switch) and None.
         """
         self.steps_since_last_switch += 1
         if self.steps_since_last_switch > self.green_duration_steps:
@@ -27,27 +31,30 @@ class TimerAgent:
             return (1, None)  # Action 1: Switch
         return (0, None)      # Action 0: Keep
 
-def evaluate_agent(agent: TimerAgent | TrafficAgent, spawn_rate: int = None, 
-                   spawn_configs: dict = None, num_episodes: int = 10) -> dict:
+def evaluate_agent(agent: Union[TimerAgent, TrafficAgent], 
+                   spawn_rate: Optional[int] = None, 
+                   spawn_configs: Optional[Dict[str, int]] = None, 
+                   num_episodes: int = 10) -> Dict[str, float]:
     """
-    Runs an agent in the environment for a number of episodes and collects metrics.
-    
-    Parameters:
-        agent: The agent to evaluate (TimerAgent or TrafficAgent).
-        spawn_rate: The vehicle spawn rate for the environment.
+    Evaluates an agent's performance in the traffic environment over multiple episodes.
+
+    Args:
+        agent: The agent to evaluate (either TimerAgent or a trained SB3 model).
+        spawn_rate: The uniform vehicle spawn rate for the environment.
         spawn_configs: Specific spawn configurations for different directions.
-        num_episodes: Number of episodes to run for evaluation.
+                       Overrides `spawn_rate` if provided.
+        num_episodes: The number of episodes to run for the evaluation.
 
     Returns:
-        dict: A dictionary containing evaluation metrics.
+        A dictionary containing key performance metrics, averaged over all episodes.
     """
-    # Create a fresh environment for evaluation
+    # Create a fresh, non-rendered environment for evaluation
     env = TrafficEnv(spawn_rate=spawn_rate, spawn_configs=spawn_configs)
     
     total_wait_time_frames = 0
     total_throughput = 0
     total_collisions = 0
-    all_completed_wait_times = []
+    all_completed_wait_times = []  # Stores wait times of cars that successfully passed
     
     for episode in range(num_episodes):
         obs, info = env.reset()
@@ -55,39 +62,39 @@ def evaluate_agent(agent: TimerAgent | TrafficAgent, spawn_rate: int = None,
         truncated = False
         
         while not (terminated or truncated):
-            # The agent.predict() method from SB3 handles single observations correctly
+            # The .predict() method is compatible for both TimerAgent and SB3 models
             action, _ = agent.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
 
-        # At the end of the episode, collect metrics from the simulation
+        # Collect metrics from the simulation at the end of the episode
         total_wait_time_frames += env.sim.total_wait_time_steps
         total_throughput += env.sim.cars_passed_intersection
         total_collisions += env.collision_count
         all_completed_wait_times.extend(env.sim.completed_car_wait_times)
 
-    # Avoid division by zero if num_episodes is 0
+    # Avoid division by zero if evaluation is interrupted
     if num_episodes == 0:
         return {
-            "Average Wait Time per Car (seconds)": 0,
-            "95th Percentile Wait Time (seconds)": 0,
-            "Average Throughput (cars/episode)": 0,
-            "Average Collisions per Episode": 0,
+            "Average Wait Time per Car (seconds)": 0.0,
+            "95th Percentile Wait Time (seconds)": 0.0,
+            "Average Throughput (cars/episode)": 0.0,
+            "Average Collisions per Episode": 0.0,
         }
 
     # --- Calculate Final Metrics ---
     
-    # Throughput and Collisions
+    # Average throughput and collisions per episode
     avg_throughput = total_throughput / num_episodes
     avg_collisions = total_collisions / num_episodes
 
-    # Normalized wait time: The average time each car that passed had to wait.
-    # This is a much fairer metric for comparing efficiency.
+    # Calculate wait time metrics based only on cars that completed their journey.
+    # This provides a more accurate measure of efficiency.
     if total_throughput > 0:
         avg_wait_time_per_car_seconds = (np.mean(all_completed_wait_times)) / FPS
         p95_wait_time_seconds = np.percentile(all_completed_wait_times, 95) / FPS
     else:
-        avg_wait_time_per_car_seconds = 0
-        p95_wait_time_seconds = 0
+        avg_wait_time_per_car_seconds = 0.0
+        p95_wait_time_seconds = 0.0
 
     env.close()
     

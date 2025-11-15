@@ -1,12 +1,20 @@
 # tuning.py
 
+"""
+Hyperparameter tuning for the PPO agent using the Optuna library.
+
+This script defines an "objective" function that Optuna attempts to maximize.
+Each "trial" in Optuna trains a PPO model with a different set of hyperparameters
+and evaluates its performance. A pruner is used to stop unpromising trials early.
+"""
+
 import optuna
 import os
 import torch as th
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 from environment import TrafficEnv
 
@@ -19,7 +27,13 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 class TrialEvalCallback(EvalCallback):
-    """Custom callback for Optuna that combines evaluation and pruning."""
+    """
+    Custom callback for Optuna that combines model evaluation with trial pruning.
+    
+    This callback is triggered periodically during training. It evaluates the
+    model's performance, reports the score to Optuna, and checks if the trial
+    should be stopped early (pruned) based on its performance relative to others.
+    """
     
     def __init__(self, eval_env, trial: optuna.Trial, n_eval_episodes=5, 
                  eval_freq=10000, log_path=None, best_model_save_path=None,
@@ -33,31 +47,43 @@ class TrialEvalCallback(EvalCallback):
         self.is_pruned = False
 
     def _on_step(self) -> bool:
-        # This function is called periodically by the PPO learn method.
+        """
+        This method is called periodically by the PPO `learn` method.
+        """
         if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
-            # First, execute the evaluation logic from the parent EvalCallback.
-            # This will run the evaluations and update self.last_mean_reward.
+            # First, run the evaluation logic from the parent class.
+            # This will update `self.last_mean_reward`.
             super()._on_step()
             
-            # Report the result to Optuna for this "step" (an evaluation cycle).
+            # Report the latest performance to Optuna.
             self.eval_idx += 1
             self.trial.report(self.last_mean_reward, self.eval_idx)
             
-            # Check if the trial should be pruned.
+            # Check with Optuna's pruner if this trial should be terminated.
             if self.trial.should_prune():
                 self.is_pruned = True
-                # Return False to stop the training.
-                return False
-        # Continue training if not time for evaluation or if not pruned.
+                return False  # Return False to stop the training loop.
+                
         return True
 
 
 def objective(trial: optuna.Trial) -> float:
     """
     The objective function for Optuna to optimize.
+
+    This function defines the search space for hyperparameters, creates a PPO
+    model with a sampled configuration, trains it, and returns the final
+    performance score (mean reward).
+
+    Args:
+        trial: An Optuna Trial object, used to suggest hyperparameter values.
+
+    Returns:
+        The mean reward achieved by the model on the evaluation environment.
     """
     print(f"\n--- Starting Trial {trial.number} ---")
 
+    # Define the hyperparameter search space
     model_params = {
         'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True),
         'n_steps': trial.suggest_categorical('n_steps', [512, 1024, 2048, 4096]),
@@ -77,13 +103,15 @@ def objective(trial: optuna.Trial) -> float:
     
     policy_kwargs = dict(net_arch=net_arch, activation_fn=th.nn.ReLU)
 
-    train_env = TrafficEnv(is_training=True)
+    # Create separate training and evaluation environments
+    # Note: `VecNormalize` is not used here for simplicity, but could be added.
+    train_env = TrafficEnv() # Headless for speed
     train_env = Monitor(train_env)
-    train_vec_env = VecNormalize(DummyVecEnv([lambda: train_env]))
+    train_vec_env = DummyVecEnv([lambda: train_env])
 
-    eval_env_raw = TrafficEnv(is_training=False)
+    eval_env_raw = TrafficEnv()
     eval_env_raw = Monitor(eval_env_raw)
-    eval_vec_env = VecNormalize(DummyVecEnv([lambda: eval_env_raw]), training=False, norm_reward=False, norm_obs=True)
+    eval_vec_env = DummyVecEnv([lambda: eval_env_raw])
 
     model = PPO(
         'MlpPolicy',
@@ -104,12 +132,15 @@ def objective(trial: optuna.Trial) -> float:
 
     last_reward = -float('inf')
     try:
+        # Train the model, with the callback handling evaluation and pruning
         model.learn(total_timesteps=N_TIMESTEPS_PER_TRIAL, callback=eval_callback)
         last_reward = eval_callback.last_mean_reward
     except AssertionError as e:
-        print(f"Trial {trial.number} failed with error: {e}")
+        # Catch assertion errors which can happen with invalid hyperparameter combinations in SB3
+        print(f"Trial {trial.number} failed with an assertion error: {e}. Pruning trial.")
         raise optuna.exceptions.TrialPruned()
     finally:
+        # Ensure environments are closed to free resources
         train_vec_env.close()
         eval_vec_env.close()
 
@@ -118,29 +149,3 @@ def objective(trial: optuna.Trial) -> float:
 
     print(f"--- Trial {trial.number} Finished. Mean Reward: {last_reward:.2f} ---")
     return last_reward
-
-
-if __name__ == "__main__":
-    # A trial is pruned if its value is worse than the median of past trials.
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=EVAL_FREQ // 2)
-    study = optuna.create_study(direction='maximize', pruner=pruner)
-
-    try:
-        study.optimize(objective, n_trials=N_TRIALS)
-    except KeyboardInterrupt:
-        print("\nOptimization interrupted by user.")
-
-    print("\n\n--- OPTIMIZATION FINISHED ---")
-    print(f"Number of finished trials: {len(study.trials)}")
-    
-    if study.best_trial:
-        print("\n--- Best trial ---")
-        trial = study.best_trial
-        print(f"  Value (Mean Reward): {trial.value:.4f}")
-        print("  Params: ")
-        for key, value in trial.params.items():
-            print(f"    '{key}': {value},")
-    else:
-        print("No trials were completed successfully.")
-
-    print("\nTo use these parameters, copy them into the BEST_PARAMS dictionary in main.py")

@@ -48,7 +48,7 @@ def print_results(scenario_name, results):
 
 if __name__ == "__main__":
     # === 1. CURRICULUM TRAINING PHASE ===
-    TRAIN_MODEL = False
+    TRAIN_MODEL = True
     EVALUATE_MODEL = True
 
     last_trained_model_path = None
