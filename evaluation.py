@@ -1,5 +1,5 @@
 # evaluation.py
-
+import pandas as pd
 from typing import Union, Dict, Optional
 import numpy as np
 
@@ -55,6 +55,7 @@ def evaluate_agent(agent: Union[TimerAgent, TrafficAgent],
     total_throughput = 0
     total_collisions = 0
     all_completed_wait_times = []  # Stores wait times of cars that successfully passed
+    history_data = []
     
     for episode in range(num_episodes):
         obs, info = env.reset()
@@ -65,12 +66,27 @@ def evaluate_agent(agent: Union[TimerAgent, TrafficAgent],
             # The .predict() method is compatible for both TimerAgent and SB3 models
             action, _ = agent.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
+            info_dict = {
+                "Step": env.current_step,
+                "Episode": episode,
+                "Scenario": "Rush Hour", # or pass this in
+                "Agent": "RL", # or pass this in
+                "Queue_Length_N": env.sim.get_queue_lengths()['N'],
+                "Queue_Length_Total": sum(env.sim.get_queue_lengths().values()),
+                "Current_Phase": env.sim.current_phase,
+                "Action": action,
+                "Total_Wait_Time": env.sim.total_wait_time_steps
+            }
+            history_data.append(info_dict)
 
         # Collect metrics from the simulation at the end of the episode
         total_wait_time_frames += env.sim.total_wait_time_steps
         total_throughput += env.sim.cars_passed_intersection
         total_collisions += env.collision_count
         all_completed_wait_times.extend(env.sim.completed_car_wait_times)
+
+    df = pd.DataFrame(history_data)
+    df.to_csv("simulation_log.csv", index=False)
 
     # Avoid division by zero if evaluation is interrupted
     if num_episodes == 0:

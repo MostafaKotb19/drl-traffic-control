@@ -40,6 +40,7 @@ TRAINING_STAGES = [
         }
     }
 ]
+BEST_PPO = "ppo"
 
 def print_results(scenario_name, results):
     print(f"\n--- Results for {scenario_name} ---")
@@ -48,7 +49,7 @@ def print_results(scenario_name, results):
 
 if __name__ == "__main__":
     # === 1. CURRICULUM TRAINING PHASE ===
-    TRAIN_MODEL = True
+    TRAIN_MODEL = False
     EVALUATE_MODEL = True
 
     last_trained_model_path = None
@@ -103,10 +104,21 @@ if __name__ == "__main__":
     else:
         num_eval_episodes = 20
         best_model_path = final_agent_for_eval.best_model_path + ".zip"
-
+        model_found = False
         if not os.path.exists(best_model_path):
-             print(f"Cannot run evaluation. Trained model not found at {best_model_path}")
-        else:
+            print(f"Cannot run evaluation. Trained model not found at {best_model_path}")
+            try:
+                final_agent_for_eval = TrafficAgent(
+                    train_env=TrafficEnv(), # A dummy environment is sufficient to initialize the agent
+                    model_name=BEST_PPO
+                )
+                best_model_path = final_agent_for_eval.best_model_path + ".zip"
+                model_found = True
+            except Exception as e:
+                print(f"Error initializing TrafficAgent: {e}")
+                final_agent_for_eval = None
+                model_found = False
+        if model_found or final_agent_for_eval:
             print(f"Loading final trained agent from {best_model_path}...")
             rl_agent = PPO.load(best_model_path)
             timer_agent = TimerAgent()
