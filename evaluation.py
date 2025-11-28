@@ -56,6 +56,14 @@ def evaluate_agent(agent: Union[TimerAgent, TrafficAgent],
     total_collisions = 0
     all_completed_wait_times = []  # Stores wait times of cars that successfully passed
     history_data = []
+
+    scenario = ""
+    if spawn_rate == SPAWN_RATE_NORMAL:
+        scenario = "Normal Traffic"
+    elif spawn_rate == SPAWN_RATE_RUSH_HOUR:
+        scenario = "Rush Hour Traffic"
+    elif spawn_configs is not None:
+        scenario = f"Unbalanced Traffic"
     
     for episode in range(num_episodes):
         obs, info = env.reset()
@@ -69,8 +77,8 @@ def evaluate_agent(agent: Union[TimerAgent, TrafficAgent],
             info_dict = {
                 "Step": env.current_step,
                 "Episode": episode,
-                "Scenario": "Rush Hour", # or pass this in
-                "Agent": "RL", # or pass this in
+                "Scenario": scenario,
+                "Agent": agent.__class__.__name__,
                 "Queue_Length_N": env.sim.get_queue_lengths()['N'],
                 "Queue_Length_Total": sum(env.sim.get_queue_lengths().values()),
                 "Current_Phase": env.sim.current_phase,
